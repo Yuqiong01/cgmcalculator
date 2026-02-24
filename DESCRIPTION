@@ -1,0 +1,43 @@
+Package: cgmcalculator
+Title: CGM Metric Computation, AGP Construction and Functional Data Analysis
+Version: 1.0.0
+Authors@R: 
+    c(
+      person("Yuqiong", "Li", email = "yuqiong.li01@gmail.com", role = c("aut", "cre")), 
+      person("Jin", "Xu", email = "xujin1@nbu.edu.cn", role = c("ths", "fnd")), 
+      person("Lindan", "Ji", email = "jilindan@nbu.edu.cn", role = c("ths", "fnd"))
+    )
+Description: Tools for the computation of continuous glucose monitoring (CGM) metrics, 
+    construction and visualization of ambulatory glucose profiles (AGP), and functional 
+    data analysis of 24-hour glucose trajectories. The package provides a unified workflow 
+    for transforming cleaned CGM data into standardized metrics, population- and 
+    subject-level AGP summaries, and functional regression models. It supports efficient 
+    processing of large-scale CGM datasets and produces publication-ready graphics and 
+    reports for clinical and epidemiological research.
+License: MIT + file LICENSE
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Imports:
+    XML,
+    readr,
+    readxl,
+    parsedate,
+    pracma,
+    zoo,
+    pastecs,
+    stats,
+    utils,
+    rlang,
+    dplyr,
+    tibble,
+    ggplot2,
+    grid,
+    tf,
+    lubridate,
+    tidyr
+Suggests:
+    mgcv,
+    refund,
+    viridisLite,
+    viridis
