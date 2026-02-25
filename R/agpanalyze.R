@@ -600,15 +600,21 @@ agpanalyze <- function(
     term_all <- names(sm)
     suffix <- if (any(grepl("\\(yindex\\)$", term_all))) "yindex" else "yind"
 
+    # --- hardening: clean + keep only functional coef terms ---
+    term_all <- term_all[!is.na(term_all) & nzchar(term_all)]
+    term_all <- term_all[term_all != "character(0)"]
+    term_all <- term_all[grepl(paste0("\\(", suffix, "\\)$"), term_all)]
+
+    # optional drops (mostly redundant after the line above, but ok to keep)
     if (isTRUE(drop_re)) {
       term_all <- term_all[!grepl("^s\\(.+\\)$", term_all)]
     }
+    if (isTRUE(drop_yind_smooth)) {
+      term_all <- term_all[!grepl(paste0("^s\\(", suffix, "(\\.vec)?\\)$"), term_all)]
+      term_all <- term_all[!grepl(paste0("^s\\(", suffix, "(\\.vec)?,.*\\)$"), term_all)]
+    }
     if (isTRUE(drop_intercept)) {
       term_all <- term_all[!grepl(paste0("^Intercept\\(", suffix, "\\)$"), term_all)]
-    }
-    if (isTRUE(drop_yind_smooth)) {
-      term_all <- term_all[!grepl(paste0("^s\\(", suffix, "\\)$"), term_all)]
-      term_all <- term_all[!grepl(paste0("^s\\(", suffix, ",.*\\)$"), term_all)]
     }
 
     normalize_terms <- function(t0) {
@@ -618,7 +624,6 @@ agpanalyze <- function(
       if (!is.null(pffr_group) && is.character(pffr_group) && length(pffr_group) == 1L) {
         t0[t0 == pffr_group] <- "pffr_group_internal"
       }
-      # remove (yind)/(yindex) if user already included
       t0 <- sub("\\((yind|yindex)\\)$", "", t0)
       paste0(t0, "(", suffix, ")")
     }
@@ -626,7 +631,6 @@ agpanalyze <- function(
     if (!is.null(terms) && length(terms) >= 1L) {
       t_full <- normalize_terms(terms)
       term_use <- intersect(term_all, t_full)
-
       if (!length(term_use)) {
         stop(
           "None of requested terms found in smterms.\n",
@@ -638,17 +642,17 @@ agpanalyze <- function(
       term_use <- term_all
     }
 
-    out <- dplyr::bind_rows(lapply(term_use, function(tt) {
+    out_list <- lapply(term_use, function(tt) {
       tbl <- sm[[tt]]$coef
-      df <- tibble::as_tibble(tbl)
+      if (is.null(tbl) || !NROW(tbl)) return(NULL)
 
+      df <- tibble::as_tibble(tbl)
       x_candidates <- intersect(names(df), c("yind.vec", "yindex.vec", "yind", "yindex", "epoch", "arg"))
       if (!length(x_candidates)) {
         stop("Cannot find y-index column for term: ", tt,
              "\nAvailable columns: ", paste(names(df), collapse = ", "))
       }
       xcol <- x_candidates[1L]
-
       if (!("value" %in% names(df))) stop("No 'value' column for term: ", tt)
       if (!("se" %in% names(df))) stop("No 'se' column for term: ", tt)
 
@@ -661,7 +665,9 @@ agpanalyze <- function(
         lb   = as.numeric(.data$value) - 1.96 * as.numeric(.data$se),
         ub   = as.numeric(.data$value) + 1.96 * as.numeric(.data$se)
       )
-    }))
+    })
+
+    out <- dplyr::bind_rows(Filter(Negate(is.null), out_list))
 
     out <- out |>
       dplyr::mutate(
