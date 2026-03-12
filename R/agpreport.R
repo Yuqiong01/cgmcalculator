@@ -2116,10 +2116,14 @@ agpreport <- function(inputdir,
       }
 
       if (!is.null(p_multiday)) {
+        grid::grid.newpage()
         grid::grid.draw(ggplot2::ggplotGrob(p_multiday))
       }
 
-      grid::grid.draw(ggplot2::ggplotGrob(p_daily))
+      if (!is.null(p_daily)) {
+        grid::grid.newpage()
+        grid::grid.draw(ggplot2::ggplotGrob(p_daily))
+      }
 
       grDevices::dev.off()
     }
@@ -2179,6 +2183,7 @@ agpreport <- function(inputdir,
 
   # Page 2: daily overlay per subject (LOESS)
   if (isTRUE(subject_overlay) && !is.null(AGPloess)) {
+    grid::grid.newpage()
     grid::grid.draw(ggplot2::ggplotGrob(AGPloess))
   }
 
