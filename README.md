@@ -1,5 +1,8 @@
 # cgmcalculator
 
+[![GitHub release](https://img.shields.io/github/v/release/Yuqiong01/cgmcalculator)](https://github.com/Yuqiong01/cgmcalculator/releases)
+[![License](https://img.shields.io/github/license/Yuqiong01/cgmcalculator)](LICENSE)
+
 An R package for **Continuous Glucose Monitoring (CGM)** data processing,  
 comprehensive metric calculation, AGP-style visualization, and  
 function-on-scalar regression using **functional data analysis (FDA)**.

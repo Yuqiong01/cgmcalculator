@@ -17,6 +17,7 @@ agpanalyze(
   upsample_rule = 1,
   make_famm = TRUE,
   smooth_k = 12,
+  famm_step_mins = 60,
   pffr_filter = NULL,
   run_pffr = FALSE,
   pffr_group = NULL,
@@ -54,53 +55,64 @@ the path is respected and \code{outputdir} is not prepended.}
 
 \item{covariate_file}{Optional CSV path for covariates to merge by id.}
 
-\item{tz}{Timezone used to parse and format timestamps (e.g., "UTC").
-Default is "UTC".}
+\item{tz}{Timezone used to parse and format timestamps (e.g., \code{"UTC"}).
+Default is \code{"UTC"}.}
 
-\item{grid_mins}{Target time-of-day grid resolution in minutes (e.g., 5).
-Must divide 1440 exactly. Default is 5.}
+\item{grid_mins}{Target AGP time-of-day grid resolution in minutes
+(e.g., 5). Must divide 1440 exactly. Default is 5.}
 
 \item{cgm_id_col}{Column name for subject id in CGM files. If missing,
-the first column is assumed to be the id. Default is "subjectid".}
+the first column is assumed to be the id. Default is \code{"subjectid"}.}
 
 \item{cov_id_col}{Column name for subject id in the covariate file.
-Default is "subjectid".}
+Default is \code{"subjectid"}.}
 
 \item{keep_cov_order}{If TRUE, keep covariate row order and align CGM by id;
 otherwise keep only common ids and align. Default is TRUE.}
 
-\item{raw_to_grid_strategy}{Strategy when raw interval is finer than grid_mins:
-\code{"mean"} (average within each floor-time bin),
-\code{"nearest"} (closest observation to each grid center),
-or \code{"linear"} (linearly interpolate and evaluate at grid centers).
+\item{raw_to_grid_strategy}{Strategy when raw interval is finer than
+\code{grid_mins}: \code{"mean"} (average within each floor-time bin),
+\code{"nearest"} (closest observation to each grid center), or
+\code{"linear"} (linearly interpolate and evaluate at grid centers).
 Default is \code{"mean"}.}
 
 \item{upsample_rule}{Rule for interpolation when raw interval is coarser
-than \code{grid_mins} (or when \code{raw_to_grid_strategy = "linear"}),
-passed to \code{stats::approx(rule = ...)}. Use 1 to avoid extrapolation
+than \code{grid_mins} (or when
+\code{raw_to_grid_strategy = "linear"}), passed to
+\code{stats::approx(rule = ...)}. Use 1 to avoid extrapolation
 (outside range -> NA), 2 to extrapolate. Default is 1.}
 
-\item{make_famm}{If TRUE, create an hour-scale matrix sampled at centers
-00:30..23:30. Default is TRUE.}
+\item{make_famm}{If TRUE, create a subject-level response matrix sampled on
+an equally spaced time-of-day grid for downstream functional regression.
+Default is TRUE.}
 
-\item{smooth_k}{Integer. Window length (in number of grid points) for
-rolling-mean smoothing on the time-of-day grid before sampling the
-hour-scale matrix. For example, when \code{grid_mins = 5}, \code{smooth_k = 12}
-corresponds to a 60-minute window. Default is 12.}
+\item{smooth_k}{Integer. Window length (in number of AGP grid points) for
+rolling-mean smoothing on the AGP time-of-day grid before sampling the
+response matrix. For example, when \code{grid_mins = 5},
+\code{smooth_k = 12} corresponds to a 60-minute smoothing window.
+Default is 12.}
 
-\item{pffr_filter}{Optional. Subset rule applied only when \code{run_pffr=TRUE}.
-Provide a list in one of two modes:
+\item{famm_step_mins}{Sampling resolution (in minutes) for the response
+matrix used in \code{make_famm} / \code{run_pffr}. Must divide 1440 exactly.
+Default is 60. For example, \code{famm_step_mins = 15} creates a 96-point
+response grid at 15-minute centers.}
+
+\item{pffr_filter}{Optional. Subset rule applied only when
+\code{run_pffr=TRUE}. Provide a list in one of two modes:
 \itemize{
-\item \strong{Expression mode}: \code{list(expr = <condition>, drop_na = TRUE)}.
-The condition is evaluated within the pffr data (e.g.,
-\code{list(expr = rlang::expr(a > 5))} or
+\item \strong{Expression mode}:
+\code{list(expr = <condition>, drop_na = TRUE)}.
+The condition is evaluated within the pffr data
+(e.g., \code{list(expr = rlang::expr(a > 5))} or
 \code{list(expr = quote(a > 5))}).
-\item \strong{Membership mode}: \code{list(var = "col", keep = <values>, drop_na = TRUE)},
+\item \strong{Membership mode}:
+\code{list(var = "col", keep = <values>, drop_na = TRUE)},
 which keeps rows where \code{data[[var]] \%in\% keep}.
 }}
 
-\item{run_pffr}{If TRUE, fit a functional regression model via \code{refund::pffr}
-on the hour-scale matrix. Requires \code{make_famm = TRUE}. Default is FALSE.}
+\item{run_pffr}{If TRUE, fit a functional regression model via
+\code{refund::pffr} on the response matrix. Requires
+\code{make_famm = TRUE}. Default is FALSE.}
 
 \item{pffr_group}{Name of the exposure/group variable in covariates/data.
 Required when \code{run_pffr = TRUE}.}
@@ -114,39 +126,44 @@ smooth \code{s(id, bs = "re")}. If NULL, no random-effect term is added.
 Only used when \code{run_pffr = TRUE}. Default is NULL.}
 
 \item{pffr_yind}{Optional numeric vector passed to \code{refund::pffr}
-(length = ncol(hour-scale matrix)). If NULL, uses hour centers
-\code{seq(0.5, 23.5, length.out = ncol(MIMS_hour_mat))}.}
+(length = ncol(response matrix)). If NULL, uses the column positions of
+\code{MIMS_hour_mat}, which correspond to the response-grid centers
+determined by \code{famm_step_mins}.}
 
 \item{pffr_bs_yindex}{Passed to \code{refund::pffr} as \code{bs.yindex}.
-Only used when \code{run_pffr = TRUE}. Default uses a cyclic P-spline over 24 points.}
+Only used when \code{run_pffr = TRUE}. Default uses a cyclic P-spline.}
 
-\item{pffr_algorithm}{Passed to \code{refund::pffr} (e.g., "bam").
-Only used when \code{run_pffr = TRUE}. Default is "bam".}
+\item{pffr_algorithm}{Passed to \code{refund::pffr}
+(e.g., \code{"bam"}). Only used when \code{run_pffr = TRUE}.
+Default is \code{"bam"}.}
 
 \item{pffr_discrete}{Passed to \code{refund::pffr}.
 Only used when \code{run_pffr = TRUE}. Default is TRUE.}
 
 \item{make_plot}{If TRUE, extract smooth-term coefficient curves and
 build ggplot objects. Only applicable when \code{run_pffr = TRUE}.
-Default behavior: if user does not specify, then it follows \code{run_pffr}
+Default behavior: if user does not specify, then it follows
+\code{run_pffr}
 (\code{run_pffr=TRUE -> make_plot=TRUE; run_pffr=FALSE -> make_plot=FALSE}).}
 
-\item{plot_terms}{Character vector of terms to plot (without "(yind)" suffix).
-If NULL, plot all eligible smooth terms. Default is NULL.}
+\item{plot_terms}{Character vector of terms to plot
+(without \code{"(yind)"} or \code{"(yindex)"} suffix). If NULL, plot all
+eligible smooth terms. Default is NULL.}
 
 \item{plot_drop_intercept}{Drop the \code{Intercept(yind)} term from plots.
 Default is FALSE.}
 
-\item{plot_drop_re}{Drop random-effect smooth terms (e.g., \code{s(id)}).
-Default is TRUE.}
+\item{plot_drop_re}{Drop random-effect smooth terms
+(e.g., \code{s(id)}). Default is TRUE.}
 
-\item{plot_drop_yind_smooth}{Drop baseline y-index smooth terms such as \code{s(yind)}.
-Default is TRUE.}
+\item{plot_drop_yind_smooth}{Drop baseline y-index smooth terms such as
+\code{s(yind)}. Default is TRUE.}
 
 \item{coef_grid_mins}{Optional; if not NULL, interpolate coefficient curves
 to this grid in minutes (e.g., 5). Must divide 1440 exactly.
-Default behavior: if user does not specify and \code{run_pffr=TRUE} & \code{make_plot=TRUE},
-then \code{coef_grid_mins} defaults to 5 to produce the interpolated page/table.}
+Default behavior: if user does not specify and
+\code{run_pffr=TRUE} & \code{make_plot=TRUE}, then
+\code{coef_grid_mins} defaults to 5 to produce the interpolated page/table.}
 
 \item{plot_save}{If TRUE, save plots to files. Only applicable when
 \code{make_plot = TRUE}. Default behavior: follows \code{make_plot}.}
@@ -155,23 +172,25 @@ then \code{coef_grid_mins} defaults to 5 to produce the interpolated page/table.
 file name is provided (no \code{/} or \code{\\}), it is saved under
 \code{outputdir}. Default is \code{"pffr_coef_plot.pdf"}.}
 
-\item{coef_save}{If TRUE, save coefficient tables as CSV (only when
-\code{make_plot = TRUE}). File names are generated automatically as
-\code{pffr_coef_df_<group_var>.csv}, where \code{<group_var>} is the name of
-\code{pffr_group}; if \code{coef_grid_mins} is set and interpolation succeeds,
-an additional file \code{pffr_coef_df_grid<mins>min_<group_var>.csv} is also created.
+\item{coef_save}{If TRUE, save coefficient tables as CSV
+(only when \code{make_plot = TRUE}). File names are generated automatically
+as \code{pffr_coef_df_<group_var>.csv}, where \code{<group_var>} is the name
+of \code{pffr_group}; if \code{coef_grid_mins} is set and interpolation
+succeeds, an additional file
+\code{pffr_coef_df_grid<mins>min_<group_var>.csv} is also created.
 Default behavior: follows \code{make_plot}.}
 
-\item{pffr_summary_save}{If TRUE, save \code{summary(res$pffr_fit)} to a text file.
-Only applicable when \code{run_pffr = TRUE}. Default behavior: follows \code{run_pffr}.}
+\item{pffr_summary_save}{If TRUE, save \code{summary(res$pffr_fit)} to a text
+file. Only applicable when \code{run_pffr = TRUE}. Default behavior:
+follows \code{run_pffr}.}
 
 \item{pffr_summary_file}{File path for saving the pffr summary. When a bare
-file name is provided, the group variable name (\code{pffr_group}) is appended
-to the base name (before the extension) and the file is saved under
-\code{outputdir}. Default is \code{"pffr_fit_summary.txt"}.}
+file name is provided, the group variable name (\code{pffr_group}) is
+appended to the base name (before the extension) and the file is saved
+under \code{outputdir}. Default is \code{"pffr_fit_summary.txt"}.}
 
-\item{verbose}{Logical; if \code{TRUE}, emit informative messages (via
-\code{message()}) about output paths and files written. Default is
+\item{verbose}{Logical; if \code{TRUE}, emit informative messages
+(via \code{message()}) about output paths and files written. Default is
 \code{FALSE} so the function is quiet by default and does not write to
 the console unless explicitly requested. This argument does not affect
 the returned results.}
@@ -179,20 +198,31 @@ the returned results.}
 \value{
 Invisibly returns a list containing:
 \itemize{
-\item \code{cgm_df}: Subject-level tibble containing \code{MIMS_mat} and \code{MIMS_tf}
-(and covariates if provided).
-\item \code{cgm_famm_df}: Hour-scale tibble containing \code{MIMS_hour_mat} and hour-wide columns
-when \code{make_famm = TRUE}; otherwise \code{NULL}.
-\item \code{pffr_fit}: Fitted \code{refund::pffr} model when \code{run_pffr = TRUE}; otherwise \code{NULL}.
-\item \code{pffr_call}: Bookkeeping list describing the pffr call and output paths when applicable.
-\item \code{pffr_coef_df}: Coefficient table on the original y-index grid when \code{make_plot = TRUE};
+\item \code{cgm_df}: Subject-level tibble containing \code{MIMS_mat} and
+\code{MIMS_tf} (and covariates if provided).
+\item \code{cgm_famm_df}: Subject-level tibble containing
+\code{MIMS_hour_mat} and wide response-grid columns when
+\code{make_famm = TRUE}; otherwise \code{NULL}. Note that despite the
+historical object name \code{MIMS_hour_mat}, the response-grid resolution
+is determined by \code{famm_step_mins} and is not restricted to hourly
+sampling.
+\item \code{pffr_fit}: Fitted \code{refund::pffr} model when
+\code{run_pffr = TRUE}; otherwise \code{NULL}.
+\item \code{pffr_call}: Bookkeeping list describing the pffr call and
+output paths when applicable.
+\item \code{pffr_coef_df}: Coefficient table on the original response-index
+grid when \code{make_plot = TRUE}; otherwise \code{NULL}.
+\item \code{pffr_coef_df_grid}: Interpolated coefficient table when
+\code{coef_grid_mins} is not \code{NULL} and interpolation succeeds;
 otherwise \code{NULL}.
-\item \code{pffr_coef_df_grid}: Interpolated coefficient table when \code{coef_grid_mins} is not \code{NULL}
-and interpolation succeeds; otherwise \code{NULL}.
-\item \code{pffr_plot}: ggplot object for coefficient curves on the original grid when available; otherwise \code{NULL}.
-\item \code{pffr_plot_grid}: ggplot object for coefficient curves on the interpolated grid when available; otherwise \code{NULL}.
-\item Additional fields for file/grid bookkeeping, including \code{outputdir}, \code{plot_file},
-\code{coef_file}, \code{coef_file_grid}, \code{pffr_summary_file}, \code{grid_ok}, and \code{grid_reason}.
+\item \code{pffr_plot}: ggplot object for coefficient curves on the
+original response grid when available; otherwise \code{NULL}.
+\item \code{pffr_plot_grid}: ggplot object for coefficient curves on the
+interpolated grid when available; otherwise \code{NULL}.
+\item Additional fields for file/grid bookkeeping, including
+\code{outputdir}, \code{plot_file}, \code{coef_file},
+\code{coef_file_grid}, \code{pffr_summary_file},
+\code{famm_step_mins}, \code{grid_ok}, and \code{grid_reason}.
 }
 }
 \description{
@@ -203,13 +233,13 @@ are aggregated across days for each subject (AGP-style profile),
 using one of: (i) mean within floor-time bins, (ii) nearest observation
 to each grid center, or (iii) linear interpolation evaluated at grid centers.
 
-Optionally merge subject-level covariates by id, create an hour-scale
-matrix sampled at 00:30..23:30 (after optional rolling-mean smoothing
-on the grid), and optionally fit a functional regression model via
-refund::pffr on the hour-scale matrix.
+Optionally merge subject-level covariates by id, create a smoothed
+response matrix sampled on a user-defined time-of-day grid
+(e.g., every 60, 30, or 15 minutes), and optionally fit a functional
+regression model via \code{refund::pffr} on that response matrix.
 
-When a pffr model is fitted, smooth-term coefficient curves can be
-extracted and plotted on the original y-index grid and, optionally,
+When a \code{pffr} model is fitted, smooth-term coefficient curves can be
+extracted and plotted on the original response-index grid and, optionally,
 linearly interpolated to a finer time grid for plotting or saving.
 }
 \details{
@@ -224,14 +254,35 @@ Timestamps are parsed with \code{lubridate::parse_date_time()} using a
 flexible set of common date-time orders. If timestamps cannot be parsed
 in a given file, the function stops.
 
-A complete 24-hour grid is built as bin centers from \code{00:00} to
+A complete 24-hour AGP grid is built as bin centers from \code{00:00} to
 \code{(1440 - grid_mins)} minutes, i.e., labels corresponding to
 \code{seq(0, 1440 - grid_mins, by = grid_mins)}.
 
 If the inferred raw sampling interval is coarser than \code{grid_mins},
-the function always interpolates to grid centers using
+the function always interpolates to AGP grid centers using
 \code{stats::approx(rule = upsample_rule)}, regardless of
 \code{raw_to_grid_strategy}.
+}
+
+\subsection{Response matrix construction}{
+
+If \code{make_famm = TRUE}, the subject-level AGP profile is first optionally
+smoothed on the AGP grid using a rolling mean with window length
+\code{smooth_k} (measured in number of AGP grid points), and then resampled
+onto a second time-of-day grid used for downstream functional regression.
+
+The resolution of this response grid is controlled by
+\code{famm_step_mins}. For example:
+\itemize{
+\item \code{famm_step_mins = 60}: 24 response points at hour centers,
+approximately \code{00:30, 01:30, ..., 23:30};
+\item \code{famm_step_mins = 30}: 48 response points;
+\item \code{famm_step_mins = 15}: 96 response points.
+}
+
+Thus, \code{famm_step_mins} controls the temporal resolution of the
+functional response entering \code{pffr}, whereas \code{grid_mins}
+controls the AGP construction grid.
 }
 
 \subsection{Computational notes}{
@@ -240,27 +291,31 @@ Fitting \code{refund::pffr()} can be computationally expensive. Runtime and
 memory usage generally increase with the number of subjects, the response-grid
 length (number of y-index points), the number of model terms, and the basis
 dimensions used for smoothing (as specified in \code{pffr_bs_yindex}).
-Increasing the number of basis functions can therefore lead to substantially
-longer fitting times.
+Increasing the response-grid resolution (e.g., from 60-minute to 15-minute
+resolution) and/or increasing the number of basis functions can therefore
+lead to substantially longer fitting times.
 
 For faster prototyping, consider starting with fewer terms and/or a coarser
-response grid (e.g., the default 24-point hour-scale), then refining settings
-for the final model. Using \code{pffr_algorithm = "bam"} and
-\code{pffr_discrete = TRUE} may also improve performance for larger datasets.
+response grid, then refining settings for the final model. Using
+\code{pffr_algorithm = "bam"} and \code{pffr_discrete = TRUE} may also
+improve performance for larger datasets.
 }
 }
 \section{Output files}{
 
-When \code{run_pffr=TRUE} and the user provides \code{pffr_group}, the default behavior
-is to produce and save:
+When \code{run_pffr=TRUE} and the user provides \code{pffr_group}, the default
+behavior is to produce and save:
 \itemize{
-\item Two PDFs: one for all eligible terms and one for the group term only; each PDF contains
-the original coefficient curve page and (if interpolation succeeds) the interpolated page.
-\item Coefficient CSV tables on original and interpolated grids (if enabled / succeeds).
+\item Two PDFs: one for all eligible terms and one for the group term only;
+each PDF contains the original coefficient-curve page and
+(if interpolation succeeds) the interpolated page.
+\item Coefficient CSV tables on original and interpolated grids
+(if enabled / succeeds).
 \item A pffr summary text file.
 }
-When \code{plot_terms} is provided, the function saves plots for the selected terms only.
-When \code{coef_grid_mins = NULL}, the interpolated page/table are disabled.
+When \code{plot_terms} is provided, the function saves plots for the selected
+terms only. When \code{coef_grid_mins = NULL}, the interpolated page/table are
+disabled.
 }
 
 \examples{
@@ -269,17 +324,20 @@ inputdir  <- system.file("exdata", "tidydata", package = "cgmcalculator")
 outputdir <- system.file("exdata", package = "cgmcalculator")
 covariate_file <- system.file("exdata", "covariates.csv", package = "cgmcalculator")
 
-# ---- run with minimal args  ----
+# ---- run with a 15-minute response grid ----
 res <- agpanalyze(
-  inputdir       = inputdir,
-  outputdir      = outputdir,
-  covariate_file = covariate_file,
-  run_pffr       = TRUE,
-  pffr_bs_yindex = list(bs = "cp", k = 12, m = c(2, 1)),
-  pffr_group     = "micro",
-  pffr_covars    = c("age","male","education","dm_duration","egfr","tc","tg"),
-  pffr_id_re     = "subjectid",
-  verbose        = TRUE
+  inputdir         = inputdir,
+  outputdir        = outputdir,
+  covariate_file   = covariate_file,
+  grid_mins        = 5,
+  smooth_k         = 3,
+  famm_step_mins   = 15,
+  run_pffr         = TRUE,
+  pffr_bs_yindex   = list(bs = "cp", k = 24, m = c(2, 1)),
+  pffr_group       = "micro",
+  pffr_covars      = c("age","male","education","dm_duration","egfr","tc","tg"),
+  pffr_id_re       = "subjectid",
+  verbose          = TRUE
 )
 }
 

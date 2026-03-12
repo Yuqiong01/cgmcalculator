@@ -1,4 +1,3 @@
-# ================================ AGP analyze =================================
 #' Build AGP-Style 24-Hour CGM Profiles and Run Optional Functional Regression
 #'
 #' @description
@@ -9,13 +8,13 @@
 #' using one of: (i) mean within floor-time bins, (ii) nearest observation
 #' to each grid center, or (iii) linear interpolation evaluated at grid centers.
 #'
-#' Optionally merge subject-level covariates by id, create an hour-scale
-#' matrix sampled at 00:30..23:30 (after optional rolling-mean smoothing
-#' on the grid), and optionally fit a functional regression model via
-#' refund::pffr on the hour-scale matrix.
+#' Optionally merge subject-level covariates by id, create a smoothed
+#' response matrix sampled on a user-defined time-of-day grid
+#' (e.g., every 60, 30, or 15 minutes), and optionally fit a functional
+#' regression model via \code{refund::pffr} on that response matrix.
 #'
-#' When a pffr model is fitted, smooth-term coefficient curves can be
-#' extracted and plotted on the original y-index grid and, optionally,
+#' When a \code{pffr} model is fitted, smooth-term coefficient curves can be
+#' extracted and plotted on the original response-index grid and, optionally,
 #' linearly interpolated to a finer time grid for plotting or saving.
 #'
 #' @details
@@ -29,27 +28,47 @@
 #' flexible set of common date-time orders. If timestamps cannot be parsed
 #' in a given file, the function stops.
 #'
-#' A complete 24-hour grid is built as bin centers from \code{00:00} to
+#' A complete 24-hour AGP grid is built as bin centers from \code{00:00} to
 #' \code{(1440 - grid_mins)} minutes, i.e., labels corresponding to
 #' \code{seq(0, 1440 - grid_mins, by = grid_mins)}.
 #'
 #' If the inferred raw sampling interval is coarser than \code{grid_mins},
-#' the function always interpolates to grid centers using
+#' the function always interpolates to AGP grid centers using
 #' \code{stats::approx(rule = upsample_rule)}, regardless of
 #' \code{raw_to_grid_strategy}.
+#'
+#' ## Response matrix construction
+#' If \code{make_famm = TRUE}, the subject-level AGP profile is first optionally
+#' smoothed on the AGP grid using a rolling mean with window length
+#' \code{smooth_k} (measured in number of AGP grid points), and then resampled
+#' onto a second time-of-day grid used for downstream functional regression.
+#'
+#' The resolution of this response grid is controlled by
+#' \code{famm_step_mins}. For example:
+#' \itemize{
+#'   \item \code{famm_step_mins = 60}: 24 response points at hour centers,
+#'     approximately \code{00:30, 01:30, ..., 23:30};
+#'   \item \code{famm_step_mins = 30}: 48 response points;
+#'   \item \code{famm_step_mins = 15}: 96 response points.
+#' }
+#'
+#' Thus, \code{famm_step_mins} controls the temporal resolution of the
+#' functional response entering \code{pffr}, whereas \code{grid_mins}
+#' controls the AGP construction grid.
 #'
 #' ## Computational notes
 #' Fitting \code{refund::pffr()} can be computationally expensive. Runtime and
 #' memory usage generally increase with the number of subjects, the response-grid
 #' length (number of y-index points), the number of model terms, and the basis
 #' dimensions used for smoothing (as specified in \code{pffr_bs_yindex}).
-#' Increasing the number of basis functions can therefore lead to substantially
-#' longer fitting times.
+#' Increasing the response-grid resolution (e.g., from 60-minute to 15-minute
+#' resolution) and/or increasing the number of basis functions can therefore
+#' lead to substantially longer fitting times.
 #'
 #' For faster prototyping, consider starting with fewer terms and/or a coarser
-#' response grid (e.g., the default 24-point hour-scale), then refining settings
-#' for the final model. Using \code{pffr_algorithm = "bam"} and
-#' \code{pffr_discrete = TRUE} may also improve performance for larger datasets.
+#' response grid, then refining settings for the final model. Using
+#' \code{pffr_algorithm = "bam"} and \code{pffr_discrete = TRUE} may also
+#' improve performance for larger datasets.
 #'
 #' @param inputdir Directory containing per-subject CGM CSV files.
 #'   Each file must contain columns: \code{timestamp} and \code{sensorglucose},
@@ -62,45 +81,55 @@
 #'   the path is respected and \code{outputdir} is not prepended.
 #' @param covariate_file Optional CSV path for covariates to merge by id.
 #'
-#' @param tz Timezone used to parse and format timestamps (e.g., "UTC").
-#'   Default is "UTC".
-#' @param grid_mins Target time-of-day grid resolution in minutes (e.g., 5).
-#'   Must divide 1440 exactly. Default is 5.
+#' @param tz Timezone used to parse and format timestamps (e.g., \code{"UTC"}).
+#'   Default is \code{"UTC"}.
+#' @param grid_mins Target AGP time-of-day grid resolution in minutes
+#'   (e.g., 5). Must divide 1440 exactly. Default is 5.
 #' @param cgm_id_col Column name for subject id in CGM files. If missing,
-#'   the first column is assumed to be the id. Default is "subjectid".
+#'   the first column is assumed to be the id. Default is \code{"subjectid"}.
 #' @param cov_id_col Column name for subject id in the covariate file.
-#'   Default is "subjectid".
+#'   Default is \code{"subjectid"}.
 #' @param keep_cov_order If TRUE, keep covariate row order and align CGM by id;
 #'   otherwise keep only common ids and align. Default is TRUE.
-#' @param raw_to_grid_strategy Strategy when raw interval is finer than grid_mins:
-#'   \code{"mean"} (average within each floor-time bin),
-#'   \code{"nearest"} (closest observation to each grid center),
-#'   or \code{"linear"} (linearly interpolate and evaluate at grid centers).
+#' @param raw_to_grid_strategy Strategy when raw interval is finer than
+#'   \code{grid_mins}: \code{"mean"} (average within each floor-time bin),
+#'   \code{"nearest"} (closest observation to each grid center), or
+#'   \code{"linear"} (linearly interpolate and evaluate at grid centers).
 #'   Default is \code{"mean"}.
 #' @param upsample_rule Rule for interpolation when raw interval is coarser
-#'   than \code{grid_mins} (or when \code{raw_to_grid_strategy = "linear"}),
-#'   passed to \code{stats::approx(rule = ...)}. Use 1 to avoid extrapolation
+#'   than \code{grid_mins} (or when
+#'   \code{raw_to_grid_strategy = "linear"}), passed to
+#'   \code{stats::approx(rule = ...)}. Use 1 to avoid extrapolation
 #'   (outside range -> NA), 2 to extrapolate. Default is 1.
 #'
-#' @param make_famm If TRUE, create an hour-scale matrix sampled at centers
-#'   00:30..23:30. Default is TRUE.
-#' @param smooth_k Integer. Window length (in number of grid points) for
-#'   rolling-mean smoothing on the time-of-day grid before sampling the
-#'   hour-scale matrix. For example, when \code{grid_mins = 5}, \code{smooth_k = 12}
-#'   corresponds to a 60-minute window. Default is 12.
+#' @param make_famm If TRUE, create a subject-level response matrix sampled on
+#'   an equally spaced time-of-day grid for downstream functional regression.
+#'   Default is TRUE.
+#' @param smooth_k Integer. Window length (in number of AGP grid points) for
+#'   rolling-mean smoothing on the AGP time-of-day grid before sampling the
+#'   response matrix. For example, when \code{grid_mins = 5},
+#'   \code{smooth_k = 12} corresponds to a 60-minute smoothing window.
+#'   Default is 12.
+#' @param famm_step_mins Sampling resolution (in minutes) for the response
+#'   matrix used in \code{make_famm} / \code{run_pffr}. Must divide 1440 exactly.
+#'   Default is 60. For example, \code{famm_step_mins = 15} creates a 96-point
+#'   response grid at 15-minute centers.
 #'
-#' @param pffr_filter Optional. Subset rule applied only when \code{run_pffr=TRUE}.
-#'   Provide a list in one of two modes:
+#' @param pffr_filter Optional. Subset rule applied only when
+#'   \code{run_pffr=TRUE}. Provide a list in one of two modes:
 #'   \itemize{
-#'     \item \strong{Expression mode}: \code{list(expr = <condition>, drop_na = TRUE)}.
-#'       The condition is evaluated within the pffr data (e.g.,
-#'       \code{list(expr = rlang::expr(a > 5))} or
+#'     \item \strong{Expression mode}:
+#'       \code{list(expr = <condition>, drop_na = TRUE)}.
+#'       The condition is evaluated within the pffr data
+#'       (e.g., \code{list(expr = rlang::expr(a > 5))} or
 #'       \code{list(expr = quote(a > 5))}).
-#'     \item \strong{Membership mode}: \code{list(var = "col", keep = <values>, drop_na = TRUE)},
+#'     \item \strong{Membership mode}:
+#'       \code{list(var = "col", keep = <values>, drop_na = TRUE)},
 #'       which keeps rows where \code{data[[var]] \%in\% keep}.
 #'   }
-#' @param run_pffr If TRUE, fit a functional regression model via \code{refund::pffr}
-#'   on the hour-scale matrix. Requires \code{make_famm = TRUE}. Default is FALSE.
+#' @param run_pffr If TRUE, fit a functional regression model via
+#'   \code{refund::pffr} on the response matrix. Requires
+#'   \code{make_famm = TRUE}. Default is FALSE.
 #' @param pffr_group Name of the exposure/group variable in covariates/data.
 #'   Required when \code{run_pffr = TRUE}.
 #' @param pffr_covars Optional character vector of additional covariate names
@@ -110,86 +139,107 @@
 #'   smooth \code{s(id, bs = "re")}. If NULL, no random-effect term is added.
 #'   Only used when \code{run_pffr = TRUE}. Default is NULL.
 #' @param pffr_yind Optional numeric vector passed to \code{refund::pffr}
-#'   (length = ncol(hour-scale matrix)). If NULL, uses hour centers
-#'   \code{seq(0.5, 23.5, length.out = ncol(MIMS_hour_mat))}.
+#'   (length = ncol(response matrix)). If NULL, uses the column positions of
+#'   \code{MIMS_hour_mat}, which correspond to the response-grid centers
+#'   determined by \code{famm_step_mins}.
 #' @param pffr_bs_yindex Passed to \code{refund::pffr} as \code{bs.yindex}.
-#'   Only used when \code{run_pffr = TRUE}. Default uses a cyclic P-spline over 24 points.
-#' @param pffr_algorithm Passed to \code{refund::pffr} (e.g., "bam").
-#'   Only used when \code{run_pffr = TRUE}. Default is "bam".
+#'   Only used when \code{run_pffr = TRUE}. Default uses a cyclic P-spline.
+#' @param pffr_algorithm Passed to \code{refund::pffr}
+#'   (e.g., \code{"bam"}). Only used when \code{run_pffr = TRUE}.
+#'   Default is \code{"bam"}.
 #' @param pffr_discrete Passed to \code{refund::pffr}.
 #'   Only used when \code{run_pffr = TRUE}. Default is TRUE.
 #'
 #' @param make_plot If TRUE, extract smooth-term coefficient curves and
 #'   build ggplot objects. Only applicable when \code{run_pffr = TRUE}.
-#'   Default behavior: if user does not specify, then it follows \code{run_pffr}
+#'   Default behavior: if user does not specify, then it follows
+#'   \code{run_pffr}
 #'   (\code{run_pffr=TRUE -> make_plot=TRUE; run_pffr=FALSE -> make_plot=FALSE}).
-#' @param plot_terms Character vector of terms to plot (without "(yind)" suffix).
-#'   If NULL, plot all eligible smooth terms. Default is NULL.
+#' @param plot_terms Character vector of terms to plot
+#'   (without \code{"(yind)"} or \code{"(yindex)"} suffix). If NULL, plot all
+#'   eligible smooth terms. Default is NULL.
 #' @param plot_drop_intercept Drop the \code{Intercept(yind)} term from plots.
 #'   Default is FALSE.
-#' @param plot_drop_re Drop random-effect smooth terms (e.g., \code{s(id)}).
-#'   Default is TRUE.
-#' @param plot_drop_yind_smooth Drop baseline y-index smooth terms such as \code{s(yind)}.
-#'   Default is TRUE.
+#' @param plot_drop_re Drop random-effect smooth terms
+#'   (e.g., \code{s(id)}). Default is TRUE.
+#' @param plot_drop_yind_smooth Drop baseline y-index smooth terms such as
+#'   \code{s(yind)}. Default is TRUE.
 #' @param coef_grid_mins Optional; if not NULL, interpolate coefficient curves
 #'   to this grid in minutes (e.g., 5). Must divide 1440 exactly.
-#'   Default behavior: if user does not specify and \code{run_pffr=TRUE} & \code{make_plot=TRUE},
-#'   then \code{coef_grid_mins} defaults to 5 to produce the interpolated page/table.
+#'   Default behavior: if user does not specify and
+#'   \code{run_pffr=TRUE} & \code{make_plot=TRUE}, then
+#'   \code{coef_grid_mins} defaults to 5 to produce the interpolated page/table.
 #' @param plot_save If TRUE, save plots to files. Only applicable when
 #'   \code{make_plot = TRUE}. Default behavior: follows \code{make_plot}.
 #' @param plot_file File path for saving the coefficient plot (PDF). When a bare
 #'   file name is provided (no \code{/} or \code{\\}), it is saved under
 #'   \code{outputdir}. Default is \code{"pffr_coef_plot.pdf"}.
 #'
-#' @param coef_save If TRUE, save coefficient tables as CSV (only when
-#'   \code{make_plot = TRUE}). File names are generated automatically as
-#'   \code{pffr_coef_df_<group_var>.csv}, where \code{<group_var>} is the name of
-#'   \code{pffr_group}; if \code{coef_grid_mins} is set and interpolation succeeds,
-#'   an additional file \code{pffr_coef_df_grid<mins>min_<group_var>.csv} is also created.
+#' @param coef_save If TRUE, save coefficient tables as CSV
+#'   (only when \code{make_plot = TRUE}). File names are generated automatically
+#'   as \code{pffr_coef_df_<group_var>.csv}, where \code{<group_var>} is the name
+#'   of \code{pffr_group}; if \code{coef_grid_mins} is set and interpolation
+#'   succeeds, an additional file
+#'   \code{pffr_coef_df_grid<mins>min_<group_var>.csv} is also created.
 #'   Default behavior: follows \code{make_plot}.
 #'
-#' @param pffr_summary_save If TRUE, save \code{summary(res$pffr_fit)} to a text file.
-#'   Only applicable when \code{run_pffr = TRUE}. Default behavior: follows \code{run_pffr}.
+#' @param pffr_summary_save If TRUE, save \code{summary(res$pffr_fit)} to a text
+#'   file. Only applicable when \code{run_pffr = TRUE}. Default behavior:
+#'   follows \code{run_pffr}.
 #' @param pffr_summary_file File path for saving the pffr summary. When a bare
-#'   file name is provided, the group variable name (\code{pffr_group}) is appended
-#'   to the base name (before the extension) and the file is saved under
-#'   \code{outputdir}. Default is \code{"pffr_fit_summary.txt"}.
+#'   file name is provided, the group variable name (\code{pffr_group}) is
+#'   appended to the base name (before the extension) and the file is saved
+#'   under \code{outputdir}. Default is \code{"pffr_fit_summary.txt"}.
 #'
-#' @param verbose Logical; if \code{TRUE}, emit informative messages (via
-#'   \code{message()}) about output paths and files written. Default is
+#' @param verbose Logical; if \code{TRUE}, emit informative messages
+#'   (via \code{message()}) about output paths and files written. Default is
 #'   \code{FALSE} so the function is quiet by default and does not write to
 #'   the console unless explicitly requested. This argument does not affect
 #'   the returned results.
 #'
 #' @return Invisibly returns a list containing:
 #' \itemize{
-#'   \item \code{cgm_df}: Subject-level tibble containing \code{MIMS_mat} and \code{MIMS_tf}
-#'     (and covariates if provided).
-#'   \item \code{cgm_famm_df}: Hour-scale tibble containing \code{MIMS_hour_mat} and hour-wide columns
-#'     when \code{make_famm = TRUE}; otherwise \code{NULL}.
-#'   \item \code{pffr_fit}: Fitted \code{refund::pffr} model when \code{run_pffr = TRUE}; otherwise \code{NULL}.
-#'   \item \code{pffr_call}: Bookkeeping list describing the pffr call and output paths when applicable.
-#'   \item \code{pffr_coef_df}: Coefficient table on the original y-index grid when \code{make_plot = TRUE};
+#'   \item \code{cgm_df}: Subject-level tibble containing \code{MIMS_mat} and
+#'     \code{MIMS_tf} (and covariates if provided).
+#'   \item \code{cgm_famm_df}: Subject-level tibble containing
+#'     \code{MIMS_hour_mat} and wide response-grid columns when
+#'     \code{make_famm = TRUE}; otherwise \code{NULL}. Note that despite the
+#'     historical object name \code{MIMS_hour_mat}, the response-grid resolution
+#'     is determined by \code{famm_step_mins} and is not restricted to hourly
+#'     sampling.
+#'   \item \code{pffr_fit}: Fitted \code{refund::pffr} model when
+#'     \code{run_pffr = TRUE}; otherwise \code{NULL}.
+#'   \item \code{pffr_call}: Bookkeeping list describing the pffr call and
+#'     output paths when applicable.
+#'   \item \code{pffr_coef_df}: Coefficient table on the original response-index
+#'     grid when \code{make_plot = TRUE}; otherwise \code{NULL}.
+#'   \item \code{pffr_coef_df_grid}: Interpolated coefficient table when
+#'     \code{coef_grid_mins} is not \code{NULL} and interpolation succeeds;
 #'     otherwise \code{NULL}.
-#'   \item \code{pffr_coef_df_grid}: Interpolated coefficient table when \code{coef_grid_mins} is not \code{NULL}
-#'     and interpolation succeeds; otherwise \code{NULL}.
-#'   \item \code{pffr_plot}: ggplot object for coefficient curves on the original grid when available; otherwise \code{NULL}.
-#'   \item \code{pffr_plot_grid}: ggplot object for coefficient curves on the interpolated grid when available; otherwise \code{NULL}.
-#'   \item Additional fields for file/grid bookkeeping, including \code{outputdir}, \code{plot_file},
-#'     \code{coef_file}, \code{coef_file_grid}, \code{pffr_summary_file}, \code{grid_ok}, and \code{grid_reason}.
+#'   \item \code{pffr_plot}: ggplot object for coefficient curves on the
+#'     original response grid when available; otherwise \code{NULL}.
+#'   \item \code{pffr_plot_grid}: ggplot object for coefficient curves on the
+#'     interpolated grid when available; otherwise \code{NULL}.
+#'   \item Additional fields for file/grid bookkeeping, including
+#'     \code{outputdir}, \code{plot_file}, \code{coef_file},
+#'     \code{coef_file_grid}, \code{pffr_summary_file},
+#'     \code{famm_step_mins}, \code{grid_ok}, and \code{grid_reason}.
 #' }
 #'
 #' @section Output files:
-#' When \code{run_pffr=TRUE} and the user provides \code{pffr_group}, the default behavior
-#' is to produce and save:
+#' When \code{run_pffr=TRUE} and the user provides \code{pffr_group}, the default
+#' behavior is to produce and save:
 #' \itemize{
-#'   \item Two PDFs: one for all eligible terms and one for the group term only; each PDF contains
-#'     the original coefficient curve page and (if interpolation succeeds) the interpolated page.
-#'   \item Coefficient CSV tables on original and interpolated grids (if enabled / succeeds).
+#'   \item Two PDFs: one for all eligible terms and one for the group term only;
+#'     each PDF contains the original coefficient-curve page and
+#'     (if interpolation succeeds) the interpolated page.
+#'   \item Coefficient CSV tables on original and interpolated grids
+#'     (if enabled / succeeds).
 #'   \item A pffr summary text file.
 #' }
-#' When \code{plot_terms} is provided, the function saves plots for the selected terms only.
-#' When \code{coef_grid_mins = NULL}, the interpolated page/table are disabled.
+#' When \code{plot_terms} is provided, the function saves plots for the selected
+#' terms only. When \code{coef_grid_mins = NULL}, the interpolated page/table are
+#' disabled.
 #'
 #' @examples
 #' \dontrun{
@@ -197,17 +247,20 @@
 #' outputdir <- system.file("exdata", package = "cgmcalculator")
 #' covariate_file <- system.file("exdata", "covariates.csv", package = "cgmcalculator")
 #'
-#' # ---- run with minimal args  ----
+#' # ---- run with a 15-minute response grid ----
 #' res <- agpanalyze(
-#'   inputdir       = inputdir,
-#'   outputdir      = outputdir,
-#'   covariate_file = covariate_file,
-#'   run_pffr       = TRUE,
-#'   pffr_bs_yindex = list(bs = "cp", k = 12, m = c(2, 1)),
-#'   pffr_group     = "micro",
-#'   pffr_covars    = c("age","male","education","dm_duration","egfr","tc","tg"),
-#'   pffr_id_re     = "subjectid",
-#'   verbose        = TRUE
+#'   inputdir         = inputdir,
+#'   outputdir        = outputdir,
+#'   covariate_file   = covariate_file,
+#'   grid_mins        = 5,
+#'   smooth_k         = 3,
+#'   famm_step_mins   = 15,
+#'   run_pffr         = TRUE,
+#'   pffr_bs_yindex   = list(bs = "cp", k = 24, m = c(2, 1)),
+#'   pffr_group       = "micro",
+#'   pffr_covars      = c("age","male","education","dm_duration","egfr","tc","tg"),
+#'   pffr_id_re       = "subjectid",
+#'   verbose          = TRUE
 #' )
 #' }
 #'
@@ -215,57 +268,56 @@
 #' @seealso \code{tf::tfd}
 #' @export
 agpanalyze <- function(
-                        # 1) I/O
-                        inputdir,
-                        outputdir = tempdir(),
-                        covariate_file = NULL,
+    # 1) I/O
+  inputdir,
+  outputdir = tempdir(),
+  covariate_file = NULL,
 
-                        # 2) parsing / grid
-                        tz = "UTC",
-                        grid_mins = 5,
-                        cgm_id_col = "subjectid",
-                        cov_id_col = "subjectid",
-                        keep_cov_order = TRUE,
-                        raw_to_grid_strategy = c("mean", "nearest", "linear"),
-                        upsample_rule = 1,
+  # 2) parsing / grid
+  tz = "UTC",
+  grid_mins = 5,
+  cgm_id_col = "subjectid",
+  cov_id_col = "subjectid",
+  keep_cov_order = TRUE,
+  raw_to_grid_strategy = c("mean", "nearest", "linear"),
+  upsample_rule = 1,
 
-                        # 3) hour-matrix (FAMM-style)
-                        make_famm = TRUE,
-                        smooth_k = 12,
+  # 3) response-matrix for FAMM / pffr
+  make_famm = TRUE,
+  smooth_k = 12,
+  famm_step_mins = 60,
 
-                        # 4) pffr modeling
-                        pffr_filter = NULL,
-                        run_pffr = FALSE,
-                        pffr_group = NULL,
-                        pffr_covars = NULL,
-                        pffr_id_re = NULL,
-                        pffr_yind = NULL,
-                        pffr_bs_yindex = list(bs = "cp", k = 24, m = c(2, 1)),
-                        pffr_algorithm = "bam",
-                        pffr_discrete = TRUE,
+  # 4) pffr modeling
+  pffr_filter = NULL,
+  run_pffr = FALSE,
+  pffr_group = NULL,
+  pffr_covars = NULL,
+  pffr_id_re = NULL,
+  pffr_yind = NULL,
+  pffr_bs_yindex = list(bs = "cp", k = 24, m = c(2, 1)),
+  pffr_algorithm = "bam",
+  pffr_discrete = TRUE,
 
-                        # 5) plotting / saving (AUTO defaults: follow run_pffr unless user overrides)
-                        make_plot = NA,
-                        plot_terms = NULL,
-                        plot_drop_intercept = FALSE,
-                        plot_drop_re = TRUE,
-                        plot_drop_yind_smooth = TRUE,
-                        coef_grid_mins = NA,
-                        plot_save = NA,
-                        plot_file = "pffr_coef_plot.pdf",
-                        coef_save = NA,
+  # 5) plotting / saving (AUTO defaults: follow run_pffr unless user overrides)
+  make_plot = NA,
+  plot_terms = NULL,
+  plot_drop_intercept = FALSE,
+  plot_drop_re = TRUE,
+  plot_drop_yind_smooth = TRUE,
+  coef_grid_mins = NA,
+  plot_save = NA,
+  plot_file = "pffr_coef_plot.pdf",
+  coef_save = NA,
 
-                        # 6) summary output (AUTO defaults: follow run_pffr unless user overrides)
-                        pffr_summary_save = NA,
-                        pffr_summary_file = "pffr_fit_summary.txt",
+  # 6) summary output (AUTO defaults: follow run_pffr unless user overrides)
+  pffr_summary_save = NA,
+  pffr_summary_file = "pffr_fit_summary.txt",
 
-                        # 7) misc
-                        verbose = FALSE
-                      ) {
+  # 7) misc
+  verbose = FALSE
+) {
 
   # -------------------- auto-default normalization --------------------
-
-  # make_plot: NA means "auto"
   if (length(make_plot) == 1L && is.na(make_plot)) {
     make_plot <- isTRUE(run_pffr)
   }
@@ -273,7 +325,6 @@ agpanalyze <- function(
     stop("`make_plot` must be TRUE/FALSE (or NA for auto).")
   }
 
-  # plot_save: NA means "auto follow make_plot"
   if (length(plot_save) == 1L && is.na(plot_save)) {
     plot_save <- isTRUE(make_plot)
   }
@@ -281,7 +332,6 @@ agpanalyze <- function(
     stop("`plot_save` must be TRUE/FALSE (or NA for auto).")
   }
 
-  # coef_save: NA means "auto follow make_plot"
   if (length(coef_save) == 1L && is.na(coef_save)) {
     coef_save <- isTRUE(make_plot)
   }
@@ -289,7 +339,6 @@ agpanalyze <- function(
     stop("`coef_save` must be TRUE/FALSE (or NA for auto).")
   }
 
-  # pffr_summary_save: NA means "auto follow run_pffr"
   if (length(pffr_summary_save) == 1L && is.na(pffr_summary_save)) {
     pffr_summary_save <- isTRUE(run_pffr)
   }
@@ -346,7 +395,7 @@ agpanalyze <- function(
     mins[mins > 1440] <- 1440L
     hh <- mins %/% 60L
     mm <- mins %% 60L
-    sprintf("%02d:%02d", hh, mm)  # 1440 -> "24:00"
+    sprintf("%02d:%02d", hh, mm)
   }
 
   .default_plot_file_all <- function(group) {
@@ -385,8 +434,13 @@ agpanalyze <- function(
                                   width = 10, height = 5, useDingbats = FALSE) {
     if (is.null(plot1) && is.null(plot2)) return(invisible(FALSE))
 
-    grDevices::pdf(file = file, onefile = TRUE,
-                   width = width, height = height, useDingbats = useDingbats)
+    grDevices::pdf(
+      file = file,
+      onefile = TRUE,
+      width = width,
+      height = height,
+      useDingbats = useDingbats
+    )
     on.exit(grDevices::dev.off(), add = TRUE)
 
     if (!is.null(plot1)) .draw_ggplot_to_device(plot1)
@@ -395,7 +449,6 @@ agpanalyze <- function(
     invisible(TRUE)
   }
 
-  # For interpolation stability only: close each term at 0/24
   .close_ends <- function(df, x = "hour") {
     x <- rlang::as_name(rlang::ensym(x))
 
@@ -428,20 +481,16 @@ agpanalyze <- function(
       stop("Package 'grid' is required for plotting.")
     }
 
-    # ---- coerce types ----
     if ("term" %in% names(df)) df$term <- as.character(df$term)
     for (nm in intersect(c("yind", "hour", "coef", "lb", "ub"), names(df))) {
       df[[nm]] <- suppressWarnings(as.numeric(df[[nm]]))
     }
 
-    # ---- ensure hour exists ----
     if (!("hour" %in% names(df))) {
       if (!("yind" %in% names(df))) stop("plot df must have `hour` or `yind`.")
-      # full-chain convention: yind is hour centers (0.5..23.5)
       df$hour <- as.numeric(df$yind)
     }
 
-    # ---- ensure time label exists ----
     if (!("time" %in% names(df))) {
       .hour_to_hhmm_local <- function(hour) {
         h <- as.numeric(hour)
@@ -450,12 +499,11 @@ agpanalyze <- function(
         mins[mins > 1440] <- 1440L
         hh <- mins %/% 60L
         mm <- mins %% 60L
-        sprintf("%02d:%02d", hh, mm)  # 1440 -> "24:00"
+        sprintf("%02d:%02d", hh, mm)
       }
       df$time <- .hour_to_hhmm_local(df$hour)
     }
 
-    # ---- stable facet/order ----
     if (!is.factor(df$term)) {
       df$term <- factor(as.character(df$term), levels = unique(as.character(df$term)))
     }
@@ -494,7 +542,6 @@ agpanalyze <- function(
         x = "Time of day (24 hour clock)",
         y = "Difference in glucose (mg/dL)"
       ) +
-      # NOTE: these are ggplot2's viridis scales (no viridis::scale_*_viridis_d needed)
       ggplot2::scale_colour_viridis_d(option = "D", end = 1) +
       ggplot2::scale_fill_viridis_d(option = "D", end = 1) +
       ggplot2::theme_minimal(base_size = 13) +
@@ -523,7 +570,6 @@ agpanalyze <- function(
     if (is.null(grid_mins)) return(NULL)
     grid_h <- seq(0, 24, by = grid_mins / 60)
 
-    # ---- preserve term order from incoming df ----
     term_levels <- if (is.factor(df$term)) levels(df$term) else unique(as.character(df$term))
 
     df$term <- if (is.factor(df$term)) df$term else factor(as.character(df$term), levels = term_levels)
@@ -533,15 +579,12 @@ agpanalyze <- function(
     df$ub   <- as.numeric(df$ub)
 
     df2 <- .close_ends(df, x = "hour")
-    # keep the same factor levels after close_ends()
     df2$term <- factor(as.character(df2$term), levels = term_levels)
 
-    # ---- iterate in the exact same order as term_levels ----
     out_list <- lapply(term_levels, function(tt) {
       d <- df2[df2$term == tt, , drop = FALSE]
       d <- d[order(d$hour), , drop = FALSE]
 
-      # ensure x is strictly increasing for approx()
       if (any(duplicated(d$hour))) {
         d <- dplyr::as_tibble(d) |>
           dplyr::group_by(.data$hour) |>
@@ -600,12 +643,10 @@ agpanalyze <- function(
     term_all <- names(sm)
     suffix <- if (any(grepl("\\(yindex\\)$", term_all))) "yindex" else "yind"
 
-    # --- hardening: clean + keep only functional coef terms ---
     term_all <- term_all[!is.na(term_all) & nzchar(term_all)]
     term_all <- term_all[term_all != "character(0)"]
     term_all <- term_all[grepl(paste0("\\(", suffix, "\\)$"), term_all)]
 
-    # optional drops (mostly redundant after the line above, but ok to keep)
     if (isTRUE(drop_re)) {
       term_all <- term_all[!grepl("^s\\(.+\\)$", term_all)]
     }
@@ -686,7 +727,6 @@ agpanalyze <- function(
     out
   }
 
-  # --- build a complete time-of-day grid (bin centers) ---
   .grid_centers_minutes <- function(grid_mins) {
     seq(0, 1440 - grid_mins, by = grid_mins)
   }
@@ -700,7 +740,6 @@ agpanalyze <- function(
     sprintf("%02d:%02d", hh, mm)
   }
 
-  # --- robust per-subject aggregation onto full grid ---
   .aggregate_subject_to_grid <- function(df,
                                          tz,
                                          grid_mins,
@@ -714,7 +753,6 @@ agpanalyze <- function(
     df <- df[!is.na(df$timestamp) & !is.na(df$sensorglucose), , drop = FALSE]
     if (!nrow(df)) return(NULL)
 
-    # compute minutes-of-day
     lt <- as.POSIXlt(df$timestamp, tz = tz)
     mod_min <- lt$hour * 60 + lt$min + lt$sec / 60
     mod_min <- mod_min %% 1440
@@ -723,7 +761,6 @@ agpanalyze <- function(
     mod_min_o <- mod_min[o]
     y_o <- as.numeric(df$sensorglucose[o])
 
-    # Pre-aggregate duplicates for interpolation modes:
     if (raw_to_grid_strategy %in% c("linear","nearest")) {
       tmp <- data.frame(mod_min = mod_min_o, y = y_o)
       tmp <- tmp |>
@@ -741,7 +778,6 @@ agpanalyze <- function(
     grid_centers <- .grid_centers_minutes(grid_mins)
     grid_labels <- .minutes_to_hhmm(grid_centers)
 
-    # CASE 1: raw coarser than grid => interpolate to grid centers
     if (!is.na(step_min) && step_min > grid_mins) {
       y_at_centers <- stats::approx(
         x = mod_min_o,
@@ -753,7 +789,6 @@ agpanalyze <- function(
       return(data.frame(time = grid_labels, value = y_at_centers, stringsAsFactors = FALSE))
     }
 
-    # CASE 2: raw finer/equal to grid => explicit strategy
     if (raw_to_grid_strategy == "linear") {
       y_at_centers <- stats::approx(
         x = mod_min_o,
@@ -773,7 +808,6 @@ agpanalyze <- function(
       return(data.frame(time = grid_labels, value = y_near, stringsAsFactors = FALSE))
     }
 
-    # raw_to_grid_strategy == "mean":
     bin_left <- floor(mod_min / grid_mins) * grid_mins
     bin_left[bin_left >= 1440] <- 0
 
@@ -789,18 +823,30 @@ agpanalyze <- function(
 
   # ---------------------------------- checks ----------------------------------
   if (!dir.exists(inputdir)) stop("inputdir does not exist: ", inputdir)
+
   if (!is.numeric(grid_mins) || length(grid_mins) != 1L || grid_mins <= 0) {
     stop("`grid_mins` must be a positive numeric scalar (minutes).")
   }
   if (1440 %% grid_mins != 0) {
     stop("`grid_mins` must divide 1440 exactly (e.g., 1,2,3,4,5,6,8,10,12,15,20,30,60).")
   }
+
   if (!is.logical(keep_cov_order) || length(keep_cov_order) != 1L) stop("`keep_cov_order` must be TRUE/FALSE.")
   if (!is.logical(make_famm) || length(make_famm) != 1L) stop("`make_famm` must be TRUE/FALSE.")
+
   if (!is.numeric(smooth_k) || length(smooth_k) != 1L || smooth_k <= 0 || smooth_k %% 1 != 0) {
     stop("`smooth_k` must be a positive integer.")
   }
+
+  if (!is.numeric(famm_step_mins) || length(famm_step_mins) != 1L || famm_step_mins <= 0) {
+    stop("`famm_step_mins` must be a positive numeric scalar (minutes).")
+  }
+  if (1440 %% famm_step_mins != 0) {
+    stop("`famm_step_mins` must divide 1440 exactly (e.g., 5, 10, 15, 20, 30, 60).")
+  }
+
   if (!is.logical(run_pffr) || length(run_pffr) != 1L) stop("`run_pffr` must be TRUE/FALSE.")
+
   raw_to_grid_strategy <- match.arg(raw_to_grid_strategy)
 
   if (!is.numeric(upsample_rule) || length(upsample_rule) != 1L || !(upsample_rule %in% c(1,2))) {
@@ -825,7 +871,7 @@ agpanalyze <- function(
   }
   outputdir <- normalizePath(outputdir, winslash = "/", mustWork = TRUE)
 
-  # -------------------- read & aggregate per subject (robust grid) --------------------
+  # -------------------- read & aggregate per subject --------------------
   all_rows <- vector("list", length(file_paths))
 
   for (i in seq_along(file_paths)) {
@@ -841,9 +887,11 @@ agpanalyze <- function(
     ts_parsed <- suppressWarnings(
       lubridate::parse_date_time(
         as.character(dat$timestamp),
-        orders = c("ymd HMS","ymd HM","ymd","Ymd HMS","Ymd HM","Ymd",
-                   "mdy HMS","mdy HM","mdy",
-                   "dmy HMS","dmy HM","dmy"),
+        orders = c(
+          "ymd HMS","ymd HM","ymd","Ymd HMS","Ymd HM","Ymd",
+          "mdy HMS","mdy HM","mdy",
+          "dmy HMS","dmy HM","dmy"
+        ),
         tz = tz
       )
     )
@@ -882,7 +930,7 @@ agpanalyze <- function(
 
   cgm_wide_hhmm <- dplyr::bind_rows(all_rows)
 
-  # -------------------- HH:MM fixed grid -> minutes matrix (complete, consistent) --------------------
+  # -------------------- HH:MM fixed grid -> minutes matrix --------------------
   numeric_cols_hhmm <- setdiff(names(cgm_wide_hhmm), cgm_id_col)
   grid_centers <- .grid_centers_minutes(grid_mins)
   grid_labels  <- .minutes_to_hhmm(grid_centers)
@@ -937,40 +985,45 @@ agpanalyze <- function(
     cgm_df_out$MIMS_tf  <- tf::tfd(MINS_mat, arg = arg_hours_out)
   }
 
-  # -------------------- cgm_famm_df (hour-scale) --------------------
+  # -------------------- cgm_famm_df (generic response grid) --------------------
   cgm_famm_df <- NULL
   MIMS_hour_mat <- NULL
 
   if (isTRUE(make_famm)) {
-    hour_arg <- seq(0.5, 23.5, by = 1)  # centers
-    arg_5h <- arg_hours_out
+    response_centers_mins <- seq(
+      from = famm_step_mins / 2,
+      to   = 1440 - famm_step_mins / 2,
+      by   = famm_step_mins
+    )
+    response_arg <- response_centers_mins / 60
+    arg_grid_h <- arg_hours_out
 
-    M5 <- cgm_df_out$MIMS_mat
-    M5_smooth <- t(apply(M5, 1, .rollmean_extend, k = smooth_k))
+    M_grid <- cgm_df_out$MIMS_mat
+    M_grid_smooth <- t(apply(M_grid, 1, .rollmean_extend, k = smooth_k))
 
-    MIMS_hour_mat <- t(apply(M5_smooth, 1, function(y) {
+    MIMS_hour_mat <- t(apply(M_grid_smooth, 1, function(y) {
       stats::approx(
-        x = arg_5h,
+        x = arg_grid_h,
         y = as.numeric(y),
-        xout = hour_arg,
+        xout = response_arg,
         method = "linear",
         rule = 2
       )$y
     }))
 
     MIMS_hour_mat <- as.matrix(MIMS_hour_mat)
-    colnames(MIMS_hour_mat) <- as.character(hour_arg)
+    colnames(MIMS_hour_mat) <- as.character(response_arg)
 
     cgm_famm_df <- cgm_df_out
     cgm_famm_df$MIMS_hour_mat <- I(MIMS_hour_mat)
-    hour_wide <- tibble::as_tibble(as.data.frame(MIMS_hour_mat, check.names = FALSE))
-    cgm_famm_df <- dplyr::bind_cols(cgm_famm_df, hour_wide)
+    response_wide <- tibble::as_tibble(as.data.frame(MIMS_hour_mat, check.names = FALSE))
+    cgm_famm_df <- dplyr::bind_cols(cgm_famm_df, response_wide)
   }
 
   # --------------------------------- run pffr ---------------------------------
   if (isTRUE(run_pffr)) {
     if (!isTRUE(make_famm) || is.null(cgm_famm_df) || is.null(MIMS_hour_mat)) {
-      stop("run_pffr=TRUE requires make_famm=TRUE (need hour-scale matrix).")
+      stop("run_pffr=TRUE requires make_famm=TRUE (need response matrix).")
     }
     if (is.null(pffr_group) || !is.character(pffr_group) || length(pffr_group) != 1L) {
       stop("Please provide `pffr_group` as a single column name.")
@@ -982,7 +1035,7 @@ agpanalyze <- function(
       stop("`pffr_id_re` must be NULL or a single column name.")
     }
 
-    # ---- optional filtering for pffr subset (single-arg, two modes) ----
+    # ---- optional filtering for pffr subset ----
     if (!is.null(pffr_filter)) {
       if (!is.list(pffr_filter)) stop("`pffr_filter` must be NULL or a list().")
 
@@ -993,48 +1046,29 @@ agpanalyze <- function(
 
       n_before <- nrow(cgm_famm_df)
 
-      # helper: safely compute keep index
       .eval_filter_expr <- function(expr_obj, data) {
         if (!requireNamespace("rlang", quietly = TRUE)) {
           stop("Package 'rlang' is required when using `pffr_filter$expr`.")
         }
 
-        # expr_obj can be:
-        #   - a quoted expression: quote(a > 0)
-        #   - rlang expr/quosure: rlang::expr(a > 0) / quo(a > 0)
-        #   - a value that user wrote without quoting (e.g., a > 5),
-        #     which might have been pre-evaluated or errored elsewhere; we still try to recover.
         if (rlang::is_quosure(expr_obj)) {
           q <- expr_obj
         } else if (rlang::is_call(expr_obj) || rlang::is_symbol(expr_obj) || is.language(expr_obj)) {
           q <- rlang::new_quosure(expr_obj)
         } else {
-          # last resort: treat as constant logical / numeric vector
           return(expr_obj)
         }
 
         rlang::eval_tidy(q, data = data)
       }
 
-      # Mode 1: expr = <expression evaluated in cgm_famm_df>
       if (!is.null(pffr_filter$expr)) {
-
         expr <- pffr_filter$expr
-
-        # If user accidentally passed an unquoted expression via list(),
-        # expr might already be evaluated outside; to be robust, try to capture it.
-        # Example: list(expr = a > 5)  (bad user-side)
-        # We attempt to recover the original expression from the call.
-        if (!is.language(expr) && !requireNamespace("rlang", quietly = TRUE)) {
-          # rlang missing handled inside helper
-        }
 
         keep_idx <- NULL
         keep_idx <- tryCatch(
           .eval_filter_expr(expr, data = cgm_famm_df),
           error = function(e) {
-            # Recover from common misuse: list(expr = a > 5)
-            # by capturing the unevaluated expression from pffr_filter call
             expr_sub <- tryCatch(substitute(pffr_filter$expr), error = function(e2) NULL)
             if (!is.null(expr_sub) && (is.language(expr_sub) || is.symbol(expr_sub))) {
               .eval_filter_expr(expr_sub, data = cgm_famm_df)
@@ -1044,7 +1078,6 @@ agpanalyze <- function(
           }
         )
 
-        # allow constant logical vector returned directly
         if (is.numeric(keep_idx)) keep_idx <- keep_idx != 0
 
         if (!is.logical(keep_idx) || length(keep_idx) != n_before) {
@@ -1053,7 +1086,6 @@ agpanalyze <- function(
         if (isTRUE(drop_na)) keep_idx[is.na(keep_idx)] <- FALSE
 
       } else {
-        # Mode 2: var + keep (membership filter)
         var <- pffr_filter$var
         keep <- pffr_filter$keep
 
@@ -1068,13 +1100,11 @@ agpanalyze <- function(
         if (isTRUE(drop_na)) keep_idx <- keep_idx & !is.na(v)
       }
 
-      # apply filter + keep matrices consistent
       keep_idx <- as.logical(keep_idx)
       if (isTRUE(drop_na)) keep_idx[is.na(keep_idx)] <- FALSE
 
       cgm_famm_df <- cgm_famm_df[keep_idx, , drop = FALSE]
 
-      # IMPORTANT: keep MIMS_hour_mat consistent with filtered rows
       if (!is.null(MIMS_hour_mat)) {
         MIMS_hour_mat <- MIMS_hour_mat[keep_idx, , drop = FALSE]
         cgm_famm_df$MIMS_hour_mat <- I(MIMS_hour_mat)
@@ -1106,7 +1136,6 @@ agpanalyze <- function(
 
     g0 <- cgm_famm_df[[pffr_group]]
 
-    # ---- FORCE group into TRUE numeric 0/1 (and fix common 1/2 coding) ----
     .coerce_binary01 <- function(x) {
       x_raw <- x
 
@@ -1149,7 +1178,7 @@ agpanalyze <- function(
 
     yind <- pffr_yind
     if (is.null(yind)) {
-      yind <- seq(0.5, 23.5, length.out = nyindex)
+      yind <- as.numeric(colnames(MIMS_hour_mat))
     } else {
       if (!is.numeric(yind) || length(yind) != nyindex) {
         stop("`pffr_yind` length must equal ncol(MIMS_hour_mat) = ", nyindex)
@@ -1171,9 +1200,7 @@ agpanalyze <- function(
       bs.yindex = pffr_bs_yindex
     )
 
-    # ---- save pffr summary to txt (optional; default follows run_pffr) ----
     if (isTRUE(pffr_summary_save)) {
-
       sum_file <- pffr_summary_file
 
       if (.is_bare_filename(sum_file)) {
@@ -1202,6 +1229,7 @@ agpanalyze <- function(
       algorithm  = pffr_algorithm,
       discrete   = pffr_discrete,
       bs.yindex  = pffr_bs_yindex,
+      famm_step_mins = famm_step_mins,
       coef_grid_mins = coef_grid_mins,
       plot_file = plot_file,
       coef_save = coef_save,
@@ -1215,7 +1243,6 @@ agpanalyze <- function(
 
       group_tag <- if (!is.null(pffr_group) && nzchar(pffr_group)) pffr_group else "group"
 
-      # if user did not customize plot_file and kept default name, swap to "ALL" name
       if (.is_bare_filename(plot_file) && identical(plot_file, "pffr_coef_plot.pdf")) {
         plot_file <- .default_plot_file_all(group_tag)
       }
@@ -1223,7 +1250,6 @@ agpanalyze <- function(
       coef_file <- .default_coef_file(group_tag)
       coef_file_grid <- if (!is.null(coef_grid_mins)) .default_coef_file_grid(group_tag, coef_grid_mins) else NULL
 
-      # ---- base coef df + base plot ----
       pffr_coef_df <- .termcurve_from_pffr_smterms(
         pffr_fit         = pffr_fit,
         terms            = plot_terms,
@@ -1233,12 +1259,12 @@ agpanalyze <- function(
         clean_term_label = TRUE
       )
       pffr_coef_df <- .reorder_coef_df_raw(pffr_coef_df)
+
       pffr_plot <- .plot_termcurve_df(
         pffr_coef_df,
         title = "Adjusted time-varying coefficient functions (original grid)"
       )
 
-      # ---- grid df + grid plot (soft-fail) ----
       pffr_coef_df_grid <- NULL
       pffr_plot_grid <- NULL
       grid_ok <- NA
@@ -1276,7 +1302,6 @@ agpanalyze <- function(
         }
       }
 
-      # ---- save plots (DEFAULT: when run_pffr=TRUE, plot_save follows make_plot => TRUE) ----
       if (isTRUE(plot_save)) {
 
         if (.is_bare_filename(plot_file)) plot_file <- file.path(outputdir, plot_file)
@@ -1292,12 +1317,6 @@ agpanalyze <- function(
           }
 
         } else {
-
-          # DEFAULT MODE:
-          #   - write ALL terms (original + optional grid) into ONE pdf
-          #   - write GROUP term (original + optional grid) into ANOTHER pdf
-
-          # 2.1 ALL TERMS
           file_all <- plot_file
           if (.is_bare_filename(file_all) && identical(file_all, "pffr_coef_plot.pdf")) {
             file_all <- .default_plot_file_all(group_tag)
@@ -1312,7 +1331,6 @@ agpanalyze <- function(
 
           plot_file <- file_all
 
-          # 2.2 GROUP TERM ONLY
           file_group <- .default_plot_file_group(group_tag)
           if (.is_bare_filename(file_group)) file_group <- file.path(outputdir, file_group)
 
@@ -1324,8 +1342,10 @@ agpanalyze <- function(
           p0 <- stats::predict(pffr_fit, newdata = nd0, type = "response", se.fit = TRUE)
           p1 <- stats::predict(pffr_fit, newdata = nd1, type = "response", se.fit = TRUE)
 
-          fit0 <- p0$fit; fit1 <- p1$fit
-          se0  <- p0$se.fit; se1 <- p1$se.fit
+          fit0 <- p0$fit
+          fit1 <- p1$fit
+          se0  <- p0$se.fit
+          se1  <- p1$se.fit
 
           nyindex2 <- length(pffr_call$yind)
           yind2 <- pffr_call$yind
@@ -1382,7 +1402,6 @@ agpanalyze <- function(
         }
       }
 
-      # ---- save coef tables (DEFAULT: follows make_plot => TRUE) ----
       if (isTRUE(coef_save)) {
 
         if (.is_bare_filename(coef_file)) coef_file <- file.path(outputdir, coef_file)
@@ -1395,7 +1414,6 @@ agpanalyze <- function(
         }
       }
 
-      # ---- write back to pffr_call ----
       if (!is.null(pffr_call)) {
         pffr_call$outputdir       <- outputdir
         pffr_call$plot_file       <- plot_file
@@ -1406,10 +1424,10 @@ agpanalyze <- function(
         pffr_call$plot_file_grid_written <- plot_file_grid_written
         pffr_call$coef_file_grid_written <- coef_file_grid_written
       }
-    } # end make_plot
-  } # end run_pffr
+    }
+  }
 
-  # -------------------- return (ALWAYS return, regardless of run_pffr) --------------------
+  # -------------------- return --------------------
   out <- list(
     cgm_df            = cgm_df_out,
     cgm_famm_df       = cgm_famm_df,
@@ -1424,6 +1442,7 @@ agpanalyze <- function(
     pffr_plot_grid    = pffr_plot_grid,
 
     coef_grid_mins     = coef_grid_mins,
+    famm_step_mins     = famm_step_mins,
     plot_file          = plot_file,
     coef_save          = coef_save,
     coef_file          = coef_file,

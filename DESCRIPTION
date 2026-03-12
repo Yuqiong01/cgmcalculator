@@ -1,6 +1,6 @@
 Package: cgmcalculator
 Title: CGM Metric Computation, AGP Construction and Functional Data Analysis
-Version: 1.0.1
+Version: 1.0.2
 Authors@R: 
     c(
       person("Yuqiong", "Li", email = "yuqiong.li01@gmail.com", role = c("aut", "cre")), 
